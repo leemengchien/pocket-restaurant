@@ -1,0 +1,82 @@
+:root{
+  --primary:#e8590c; --primary-light:#fff0e6; --bg:#f6f5f3; --card:#fff;
+  --text:#1f1d1a; --muted:#8a857d; --border:#e8e5e0; --green:#2f9e44; --gold:#f59f00;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,"PingFang TC","Noto Sans TC",sans-serif;background:var(--bg);color:var(--text);
+  padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;z-index:500;background:var(--primary);color:#fff;
+  padding:calc(12px + env(safe-area-inset-top)) 16px 12px;display:flex;align-items:center;justify-content:space-between}
+header h1{font-size:18px;font-weight:700}
+#locStatus{font-size:12px;opacity:.92;max-width:55%;text-align:right}
+main{padding:14px;max-width:640px;margin:0 auto}
+section.tab{display:none}section.tab.active{display:block}
+/* bottom nav */
+nav{position:fixed;bottom:0;left:0;right:0;z-index:500;background:var(--card);border-top:1px solid var(--border);
+  display:flex;padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;background:none;border:none;padding:8px 0 6px;font-size:11px;color:var(--muted);cursor:pointer}
+nav button .ic{display:block;font-size:20px;margin-bottom:2px}
+nav button.active{color:var(--primary);font-weight:700}
+/* cards */
+.card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.card h3{font-size:16px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.badge{font-size:11px;padding:2px 8px;border-radius:99px;font-weight:600}
+.badge.want{background:#fff3bf;color:#946800}
+.badge.visited{background:#d3f9d8;color:#2b8a3e}
+.badge.other{background:#e9ecef;color:#495057}
+.chips .chip .del{margin-left:5px;cursor:pointer;font-weight:700;color:#c92a2a}
+.meta{font-size:13px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:4px 10px}
+.rating{color:var(--gold);font-weight:700}
+.dishes{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px}
+.dish{background:var(--primary-light);color:var(--primary);font-size:12px;padding:3px 10px;border-radius:99px;font-weight:600}
+.note{margin-top:6px;font-size:13px;color:#555;white-space:pre-wrap}
+.actions{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
+.actions button,.actions a{font-size:13px;padding:6px 12px;border-radius:9px;border:1px solid var(--border);
+  background:#fafaf9;color:var(--text);text-decoration:none;cursor:pointer}
+.actions .danger{color:#c92a2a}
+.actions .link{color:#1971c2;border-color:#d0e3f7;background:#f1f7fd}
+/* forms */
+label.f{display:block;font-size:13px;font-weight:600;margin:14px 0 6px;color:#444}
+input[type=text],input[type=number],select,textarea{width:100%;padding:11px 12px;border:1px solid var(--border);
+  border-radius:10px;font-size:15px;background:var(--card);color:var(--text)}
+textarea{resize:vertical;min-height:64px}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chips .chip{padding:7px 13px;border-radius:99px;border:1px solid var(--border);background:var(--card);
+  font-size:13px;cursor:pointer;color:#555}
+.chips .chip.sel{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+.btn{display:block;width:100%;padding:13px;border:none;border-radius:12px;background:var(--primary);
+  color:#fff;font-size:16px;font-weight:700;cursor:pointer;margin-top:18px}
+.btn.sub{background:#fff;color:var(--primary);border:1.5px solid var(--primary);margin-top:10px}
+.btn.mini{width:auto;display:inline-block;padding:8px 14px;font-size:13px;margin-top:0}
+.hint{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.5}
+.empty{text-align:center;color:var(--muted);padding:36px 16px;font-size:14px;line-height:1.7}
+.secTitle{font-size:14px;font-weight:800;margin:18px 0 8px;display:flex;align-items:center;gap:6px}
+.secTitle .cnt{font-size:12px;color:var(--muted);font-weight:400}
+.locBox{background:var(--primary-light);border-radius:12px;padding:10px 12px;font-size:13px;
+  display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+/* map modal */
+#mapModal{display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.5)}
+#mapModal.open{display:flex;flex-direction:column}
+#mapModal .sheet{background:var(--card);margin-top:auto;border-radius:18px 18px 0 0;padding:14px;height:78vh;display:flex;flex-direction:column}
+#map{flex:1;border-radius:12px;margin:10px 0}
+.parkTag{font-size:11px;padding:2px 8px;border-radius:99px;background:#e7f5ff;color:#1971c2;font-weight:600}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #ddd;border-top-color:var(--primary);border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+/* leaflet div pin */
+.pin{font-size:26px;line-height:30px;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.4)}
+/* login screen */
+.login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg)}
+.loginCard{background:var(--card);border-radius:20px;padding:36px 28px;max-width:360px;width:100%;
+  text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+.loginCard .logo{font-size:52px}
+.loginCard h1{font-size:24px;margin:10px 0 6px}
+.loginCard p{font-size:14px;color:var(--muted);line-height:1.7}
+.gbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin-top:24px;
+  padding:13px;border:1px solid var(--border);border-radius:12px;background:#fff;font-size:15px;
+  font-weight:600;color:#3c4043;cursor:pointer}
+.gbtn:hover{background:#f8f9fa}
+.account{display:flex;align-items:center;gap:10px;background:var(--card);border-radius:12px;padding:12px;margin-top:8px}
+.account img{width:38px;height:38px;border-radius:50%}
+.account .em{font-size:13px;color:var(--muted);word-break:break-all}
+.loadingScreen{min-height:100vh;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px;gap:8px}
