@@ -15,6 +15,11 @@ const DEF_CFG = {
   ],
 };
 const G_PRICE = { 1: '$', 2: '$$', 3: '$$$', 4: '$$$$' };
+// Google 回報價位 → 對應系統的價位分類 v 值
+const PRICE_MAP = {
+  PRICE_LEVEL_INEXPENSIVE: '1', PRICE_LEVEL_MODERATE: '2',
+  PRICE_LEVEL_EXPENSIVE: '3', PRICE_LEVEL_VERY_EXPENSIVE: '4',
+};
 
 function haversine(a, b) {
   const R = 6371000, r = (x) => (x * Math.PI) / 180;
@@ -25,11 +30,20 @@ function haversine(a, b) {
 const fmtDist = (m) => (m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(1) + ' km');
 const gmapsLink = (r) =>
   'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(r.name + ' ' + r.lat + ',' + r.lng);
+const blogSearchLink = (r) =>
+  'https://www.google.com/search?q=' + encodeURIComponent(r.name + ' 食記');
+const menuSearchLink = (r) =>
+  'https://www.google.com/search?q=' + encodeURIComponent(r.name + ' 菜單');
+const reviewLink = (r) =>
+  r.googleUri || gmapsLink(r); // 有 Google 商家頁就連過去看評論，否則用地圖搜尋
 
 const fromRow = (r) => ({
   id: r.id, name: r.name, type: r.type || '', status: r.status, price: r.price || '',
   parking: r.parking || 'unknown', dishes: r.dishes || [], notes: r.notes || '',
   lat: r.lat, lng: r.lng, createdAt: r.created_at,
+  rating: r.rating ?? null, ratingCount: r.rating_count ?? null,
+  address: r.address || '', phone: r.phone || '', hours: r.hours || [],
+  tags: r.tags || [], googleUri: r.google_uri || '',
 });
 
 async function placesFetch(kind, params) {
@@ -73,6 +87,9 @@ function Card({ r, dist, lbl, onEdit, onDel }) {
         {showPark && <span className="parkTag">{lbl('parks', r.parking)}</span>}
       </h3>
       <div className="meta">
+        {r.rating != null && (
+          <span className="rating">★ {r.rating.toFixed(1)}{r.ratingCount != null && ` (${r.ratingCount})`}</span>
+        )}
         {dist != null && <span>📏 {fmtDist(dist)}</span>}
         {r.type && <span>{r.type}</span>}
         {r.price && <span>{lbl('prices', r.price)}</span>}
@@ -82,8 +99,23 @@ function Card({ r, dist, lbl, onEdit, onDel }) {
         <div className="dishes">{r.dishes.map((d, i) => <span key={i} className="dish">⭐ {d}</span>)}</div>
       )}
       {r.notes && <div className="note">{r.notes}</div>}
+      {r.address && <div className="meta"><span>📍 {r.address}</span></div>}
+      {(r.phone || r.tags?.length > 0) && (
+        <div className="meta">
+          {r.phone && <a href={'tel:' + r.phone}>📞 {r.phone}</a>}
+          {r.tags?.map((t, i) => <span key={i} className="tag">{t}</span>)}
+        </div>
+      )}
+      {r.hours?.length > 0 && (
+        <details className="hours">
+          <summary>🕐 營業時間</summary>
+          {r.hours.map((h, i) => <div key={i}>{h}</div>)}
+        </details>
+      )}
       <div className="actions">
-        <a className="link" href={gmapsLink(r)} target="_blank" rel="noreferrer">🌐 Google 評論</a>
+        <a className="link" href={reviewLink(r)} target="_blank" rel="noreferrer">🌐 看評論</a>
+        <a className="link" href={menuSearchLink(r)} target="_blank" rel="noreferrer">📋 看菜單</a>
+        <a className="link" href={blogSearchLink(r)} target="_blank" rel="noreferrer">📝 查部落格</a>
         <button onClick={() => onEdit(r.id)}>✏️ 編輯</button>
         <button className="danger" onClick={() => onDel(r.id)}>刪除</button>
       </div>
@@ -296,7 +328,7 @@ function App({ session }) {
 
   function matchKeyword(r, k) {
     if (!k) return true;
-    const hay = (r.name + ' ' + (r.type || '') + ' ' + (r.dishes || []).join(' ') + ' ' + (r.notes || '')).toLowerCase();
+    const hay = (r.name + ' ' + (r.type || '') + ' ' + (r.dishes || []).join(' ') + ' ' + (r.notes || '') + ' ' + (r.address || '') + ' ' + (r.tags || []).join(' ')).toLowerCase();
     return k.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
   }
 
@@ -491,7 +523,7 @@ function App({ session }) {
       if (!rows.length) continue;
       const head = rows[0].map((h) => h.trim().toLowerCase());
       const iT = head.findIndex((h) => ['標題', 'title'].includes(h));
-      const iN = head.findIndex((h) => ['附註', 'note'].includes(h));
+      const iN = head.findIndex((h) => ['附註', '筆記', 'note'].includes(h));
       const iU = head.findIndex((h) => ['網址', 'url'].includes(h));
       if (iT < 0) { setGmapsStatus(`「${f.name}」不是 Google Maps 已儲存清單的 CSV，已略過`); continue; }
       rows.slice(1).forEach((r) => {
@@ -511,23 +543,38 @@ function App({ session }) {
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       setGmapsStatus(`匯入中 ${i + 1}/${items.length}：${it.name}`);
-      let loc = null;
-      const m = it.url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) || it.url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-      if (m) loc = { lat: +m[1], lng: +m[2] }; // 網址裡有座標就直接用，不耗 API
-      if (!loc) {
-        try {
-          const params = { textQuery: it.name, maxResultCount: 1 };
-          if (myLocRef.current) params.bias = { ...myLocRef.current, radius: 50000 };
-          const j = await placesFetch('searchText', params);
-          const p = (j.places || [])[0];
-          if (p) loc = { lat: p.location.latitude, lng: p.location.longitude };
-        } catch { /* ignore */ }
+      let loc = null, rating = null, ratingCount = null, placeId = null;
+      let gType = '', gPrice = '', address = '', phone = '', hours = [], tags = [], googleUri = '';
+      // 用店名查 Google，一次抓齊座標＋星等＋地址＋電話＋營業時間＋分類＋價位
+      try {
+        const params = { textQuery: it.name, maxResultCount: 1 };
+        if (myLocRef.current) params.bias = { ...myLocRef.current, radius: 50000 };
+        const j = await placesFetch('enrichSearch', params);
+        const p = (j.places || [])[0];
+        if (p) {
+          if (p.location) loc = { lat: p.location.latitude, lng: p.location.longitude };
+          placeId = p.id || null;
+          rating = p.rating ?? null;
+          ratingCount = p.userRatingCount ?? null;
+          gType = p.primaryTypeDisplayName?.text || '';
+          gPrice = PRICE_MAP[p.priceLevel] || '';
+          address = p.formattedAddress || '';
+          phone = p.nationalPhoneNumber || '';
+          hours = p.regularOpeningHours?.weekdayDescriptions || [];
+          tags = (p.types || []).filter((t) => !['point_of_interest', 'establishment', 'food'].includes(t));
+          googleUri = p.googleMapsUri || '';
+        }
+      } catch { /* ignore */ }
+      if (!loc) { // API 查不到位置時，用網址裡的座標保底
+        const m = it.url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) || it.url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+        if (m) loc = { lat: +m[1], lng: +m[2] };
       }
       if (!loc) { fail.push(it.name); continue; }
       rows.push({
-        name: it.name, type: '', status: cfg.statuses[0]?.v || 'want', price: '', parking: 'unknown',
+        name: it.name, type: gType, status: cfg.statuses[0]?.v || 'want', price: gPrice, parking: 'unknown',
         dishes: [], notes: [it.note, '來自 Google Maps 清單：' + it.list].filter(Boolean).join('\n'),
-        lat: loc.lat, lng: loc.lng,
+        lat: loc.lat, lng: loc.lng, rating, rating_count: ratingCount,
+        address, phone, hours, tags, google_uri: googleUri, place_id: placeId,
       });
     }
     let ok = 0;

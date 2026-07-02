@@ -8,6 +8,9 @@ import { createClient } from '@supabase/supabase-js';
 const FIELD_MASKS = {
   searchText:
     'places.id,places.displayName,places.rating,places.userRatingCount,places.priceLevel,places.location,places.formattedAddress,places.googleMapsUri',
+  // 匯入專用：多抓地址、電話、營業時間、分類標籤（費用較高，只在匯入時用）
+  enrichSearch:
+    'places.id,places.displayName,places.location,places.rating,places.userRatingCount,places.priceLevel,places.formattedAddress,places.nationalPhoneNumber,places.regularOpeningHours.weekdayDescriptions,places.types,places.primaryTypeDisplayName,places.googleMapsUri',
   parkingNearby: 'places.displayName',
 };
 
@@ -32,11 +35,11 @@ export async function POST(req) {
     const b = await req.json();
     let url, body, mask;
 
-    if (b.kind === 'searchText') {
+    if (b.kind === 'searchText' || b.kind === 'enrichSearch') {
       const textQuery = String(b.textQuery || '').slice(0, 200).trim();
       if (!textQuery) return Response.json({ error: 'textQuery required' }, { status: 400 });
       url = 'https://places.googleapis.com/v1/places:searchText';
-      mask = FIELD_MASKS.searchText;
+      mask = b.kind === 'enrichSearch' ? FIELD_MASKS.enrichSearch : FIELD_MASKS.searchText;
       body = {
         textQuery,
         languageCode: 'zh-TW',

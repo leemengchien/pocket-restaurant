@@ -30,6 +30,11 @@ nav button.active{color:var(--primary);font-weight:700}
 .dishes{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px}
 .dish{background:var(--primary-light);color:var(--primary);font-size:12px;padding:3px 10px;border-radius:99px;font-weight:600}
 .note{margin-top:6px;font-size:13px;color:#555;white-space:pre-wrap}
+.meta a{color:inherit;text-decoration:none}
+.tag{background:#f0efed;color:#666;font-size:11px;padding:2px 8px;border-radius:99px}
+.hours{margin-top:6px;font-size:13px;color:#555}
+.hours summary{cursor:pointer;color:#1971c2;list-style:none}
+.hours>div{margin:2px 0 2px 8px}
 .actions{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
 .actions button,.actions a{font-size:13px;padding:6px 12px;border-radius:9px;border:1px solid var(--border);
   background:#fafaf9;color:var(--text);text-decoration:none;cursor:pointer}
