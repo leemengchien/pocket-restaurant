@@ -39,23 +39,36 @@ const TYPE_ZH = {
 };
 const GENERIC_TYPES = new Set(['point_of_interest', 'establishment', 'food', 'store']);
 const zhType = (t) => TYPE_ZH[t] || t.replace(/_restaurant$/, '').replace(/_/g, ' ');
-// 從 Google addressComponents 取出國家與城市
+// 從 Google addressComponents 取出國家、城市（縣市）、地區（行政區）
 function parseCountryCity(comps) {
-  let country = '', city = '';
+  let country = '', admin1 = '', admin2 = '', locality = '', sub = '';
   for (const c of comps || []) {
     const ty = c.types || [];
-    if (ty.includes('country')) country = c.longText || c.shortText || '';
-    if (!city && ty.includes('locality')) city = c.longText || '';
+    const v = c.longText || c.shortText || '';
+    if (ty.includes('country')) country = v;
+    if (ty.includes('administrative_area_level_1')) admin1 = v;
+    if (ty.includes('administrative_area_level_2')) admin2 = v;
+    if (ty.includes('locality')) locality = v;
+    if (!sub && (ty.includes('administrative_area_level_3') || ty.includes('sublocality_level_1') || ty.includes('sublocality'))) sub = v;
   }
-  if (!city) { // 沒有 locality 時退而求其次用行政區
-    for (const c of comps || []) {
-      const ty = c.types || [];
-      if (ty.includes('administrative_area_level_1') || ty.includes('administrative_area_level_2')) {
-        city = c.longText || ''; break;
-      }
-    }
+  // 城市＝縣市層級（台灣為 admin1，如「臺北市」）；地區＝行政區（如「信義區」）
+  const city = admin1 || locality || '';
+  const district = locality && locality !== city ? locality : (admin2 || sub || '');
+  let out = { country, city, district };
+  return out;
+}
+// 從已存的中文地址字串解析縣市與地區（給既有資料補齊用，不花 API 額度）
+function parseCityDistrictFromAddress(addr) {
+  const s = String(addr || '');
+  const cityM = s.match(/([一-龥]{2}[縣市])/);
+  const city = cityM ? cityM[1] : '';
+  let district = '';
+  if (city) {
+    const rest = s.slice(s.indexOf(city) + city.length);
+    const dM = rest.match(/^([一-龥]{1,4}?[區鄉鎮市])/);
+    if (dM) district = dM[1];
   }
-  return { country, city };
+  return { city, district };
 }
 
 function haversine(a, b) {
@@ -81,7 +94,7 @@ const fromRow = (r) => ({
   rating: r.rating ?? null, ratingCount: r.rating_count ?? null,
   address: r.address || '', phone: r.phone || '', hours: r.hours || [],
   tags: r.tags || [], googleUri: r.google_uri || '',
-  country: r.country || '', city: r.city || '',
+  country: r.country || '', city: r.city || '', district: r.district || '',
 });
 
 async function placesFetch(kind, params) {
@@ -129,7 +142,7 @@ function Card({ r, dist, lbl, onEdit, onDel }) {
           <span className="rating">★ {r.rating.toFixed(1)}{r.ratingCount != null && ` (${r.ratingCount})`}</span>
         )}
         {dist != null && <span>📏 {fmtDist(dist)}</span>}
-        {(r.city || r.country) && <span>🌏 {[r.city, r.country].filter(Boolean).join('・')}</span>}
+        {(r.city || r.district || r.country) && <span>🌏 {[r.country, r.city, r.district].filter(Boolean).join('・')}</span>}
         {r.type && <span>{r.type}</span>}
         {r.price && <span>{lbl('prices', r.price)}</span>}
         {r.parking === 'none' && <span>{lbl('parks', 'none')}</span>}
@@ -343,7 +356,10 @@ function App({ session }) {
       parking: r.parking || 'unknown', dishes: (r.dishes || []).join(', '), notes: r.notes || '',
     });
     setFormLoc({ lat: r.lat, lng: r.lng });
-    setFLocText(`位置（${r.lat.toFixed(5)}, ${r.lng.toFixed(5)}）`);
+    setFAddr(r.address || '');
+    setFLocText(r.address
+      ? `📍 ${r.address}（${r.lat.toFixed(5)}, ${r.lng.toFixed(5)}）`
+      : `位置（${r.lat.toFixed(5)}, ${r.lng.toFixed(5)}）`);
     setTab('add');
   }
 
@@ -369,14 +385,15 @@ function App({ session }) {
   /* ---- 地區篩選（國家 / 城市）---- */
   const [fCountry, setFCountry] = useState('');
   const [fCity, setFCity] = useState('');
+  const [fDistrict, setFDistrict] = useState('');
   const passRegion = useCallback(
-    (r) => (!fCountry || r.country === fCountry) && (!fCity || r.city === fCity),
-    [fCountry, fCity]
+    (r) => (!fCountry || r.country === fCountry) && (!fCity || r.city === fCity) && (!fDistrict || r.district === fDistrict),
+    [fCountry, fCity, fDistrict]
   );
 
   function matchKeyword(r, k) {
     if (!k) return true;
-    const hay = (r.name + ' ' + (r.type || '') + ' ' + (r.dishes || []).join(' ') + ' ' + (r.notes || '') + ' ' + (r.address || '') + ' ' + (r.tags || []).join(' ')).toLowerCase();
+    const hay = (r.name + ' ' + (r.type || '') + ' ' + (r.dishes || []).join(' ') + ' ' + (r.notes || '') + ' ' + (r.address || '') + ' ' + (r.tags || []).join(' ') + ' ' + (r.city || '') + ' ' + (r.district || '')).toLowerCase();
     return k.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
   }
 
@@ -593,7 +610,7 @@ function App({ session }) {
       const it = items[i];
       setGmapsStatus(`匯入中 ${i + 1}/${items.length}：${it.name}`);
       let loc = null, rating = null, ratingCount = null, placeId = null;
-      let gType = '', gPrice = '', address = '', phone = '', hours = [], tags = [], googleUri = '', country = '', city = '';
+      let gType = '', gPrice = '', address = '', phone = '', hours = [], tags = [], googleUri = '', country = '', city = '', district = '';
       // 用店名查 Google，一次抓齊座標＋星等＋地址＋電話＋營業時間＋分類＋價位＋國家城市
       try {
         const params = { textQuery: it.name, maxResultCount: 1 };
@@ -614,7 +631,13 @@ function App({ session }) {
           const rawTypes = (p.types || []).filter((t) => !GENERIC_TYPES.has(t));
           tags = [...new Set([gType, ...rawTypes.map(zhType)].filter(Boolean))];
           googleUri = p.googleMapsUri || '';
-          ({ country, city } = parseCountryCity(p.addressComponents));
+          ({ country, city, district } = parseCountryCity(p.addressComponents));
+          // 補強：若結構化資料沒解出，改從中文地址字串抓縣市/地區
+          if ((!city || !district) && address) {
+            const f = parseCityDistrictFromAddress(address);
+            city = city || f.city;
+            district = district || f.district;
+          }
         }
       } catch { /* ignore */ }
       if (!loc) { // API 查不到位置時，用網址裡的座標保底
@@ -627,7 +650,7 @@ function App({ session }) {
         dishes: [], notes: [it.note, '來自 Google Maps 清單：' + it.list].filter(Boolean).join('\n'),
         lat: loc.lat, lng: loc.lng, rating, rating_count: ratingCount,
         address, phone, hours, tags, google_uri: googleUri, place_id: placeId,
-        country, city,
+        country, city, district,
       });
     }
     let ok = 0;
@@ -640,6 +663,25 @@ function App({ session }) {
     setGmapsStatus(`✅ 完成：匯入 ${ok} 筆` + (fail.length ? `；查不到座標 ${fail.length} 筆（${fail.join('、')}），可手動新增` : ''));
   }
 
+  /* ---- 既有資料補齊縣市/地區（用已存地址解析，不花 API 額度）---- */
+  const [backfillStatus, setBackfillStatus] = useState('');
+  async function backfillRegions() {
+    const targets = data.filter((r) => r.address);
+    if (!targets.length) { setBackfillStatus('沒有可解析的地址'); return; }
+    if (!confirm(`用已存的地址重新解析 ${targets.length} 筆的縣市 / 地區？（不會呼叫 Google、不花額度）`)) return;
+    let ok = 0;
+    for (const r of targets) {
+      const f = parseCityDistrictFromAddress(r.address);
+      if (!f.city && !f.district) continue; // 非中文地址（如國外）就跳過，保留原本的
+      setBackfillStatus(`處理中… ${ok + 1}/${targets.length}`);
+      const { error } = await supabase.from('restaurants').update({ city: f.city, district: f.district }).eq('id', r.id);
+      if (!error) ok++;
+    }
+    const { data: rows } = await supabase.from('restaurants').select('*').order('created_at');
+    if (rows) setData(rows.map(fromRow));
+    setBackfillStatus(`✅ 已重新分類 ${ok} 筆縣市/地區`);
+  }
+
   /* ---- 附近清單 ---- */
   const nearbyList = data
     .filter(passRegion)
@@ -650,6 +692,10 @@ function App({ session }) {
   const countryOpts = [...new Set(data.map((r) => r.country).filter(Boolean))].sort();
   const cityOpts = [...new Set(
     data.filter((r) => !fCountry || r.country === fCountry).map((r) => r.city).filter(Boolean)
+  )].sort();
+  const districtOpts = [...new Set(
+    data.filter((r) => (!fCountry || r.country === fCountry) && (!fCity || r.city === fCity))
+      .map((r) => r.district).filter(Boolean)
   )].sort();
 
   /* ---- 停車下拉選項 ---- */
@@ -673,15 +719,19 @@ function App({ session }) {
             <span>{nearbyText}</span>
             <button className="btn mini" onClick={refreshLocation}>重新定位</button>
           </div>
-          {(countryOpts.length > 0 || cityOpts.length > 0) && (
+          {(countryOpts.length > 0 || cityOpts.length > 0 || districtOpts.length > 0) && (
             <div className="row filterBar">
-              <select value={fCountry} onChange={(e) => { setFCountry(e.target.value); setFCity(''); }}>
+              <select value={fCountry} onChange={(e) => { setFCountry(e.target.value); setFCity(''); setFDistrict(''); }}>
                 <option value="">🌏 全部國家</option>
                 {countryOpts.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
-              <select value={fCity} onChange={(e) => setFCity(e.target.value)}>
+              <select value={fCity} onChange={(e) => { setFCity(e.target.value); setFDistrict(''); }}>
                 <option value="">🏙️ 全部城市</option>
                 {cityOpts.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <select value={fDistrict} onChange={(e) => setFDistrict(e.target.value)}>
+                <option value="">📍 全部地區</option>
+                {districtOpts.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
           )}
@@ -861,6 +911,11 @@ function App({ session }) {
           <button className="btn sub" style={{ marginTop: 8 }} onClick={() => document.getElementById('gmapsCsv').click()}>選擇 CSV 檔匯入</button>
           <input type="file" id="gmapsCsv" accept=".csv" multiple style={{ display: 'none' }} onChange={importGmapsCsv} />
           <p className="hint">{gmapsStatus}</p>
+
+          <div className="secTitle" style={{ marginTop: 26 }}>🔧 重新分類縣市 / 地區</div>
+          <p className="hint">用每筆「已存的地址」重新解析出縣市與地區（例如 臺北市 / 信義區），不會呼叫 Google、不花額度。之前匯入的資料若分類不對，按這個即可修正。</p>
+          <button className="btn sub" style={{ marginTop: 8 }} onClick={backfillRegions}>重新分類縣市/地區</button>
+          <p className="hint">{backfillStatus}</p>
 
           <div className="secTitle" style={{ marginTop: 26 }}>📲 安裝到手機</div>
           <p className="hint">手機瀏覽器開啟本站網址 → 分享 → 「加入主畫面」，就像 app 一樣使用。</p>
