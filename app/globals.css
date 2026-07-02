@@ -46,6 +46,7 @@ input[type=text],input[type=number],select,textarea{width:100%;padding:11px 12px
   border-radius:10px;font-size:15px;background:var(--card);color:var(--text)}
 textarea{resize:vertical;min-height:64px}
 .row{display:flex;gap:8px}.row>*{flex:1}
+.filterBar{margin-top:10px}
 .chips{display:flex;flex-wrap:wrap;gap:7px}
 .chips .chip{padding:7px 13px;border-radius:99px;border:1px solid var(--border);background:var(--card);
   font-size:13px;cursor:pointer;color:#555}

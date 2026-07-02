@@ -10,7 +10,7 @@ const FIELD_MASKS = {
     'places.id,places.displayName,places.rating,places.userRatingCount,places.priceLevel,places.location,places.formattedAddress,places.googleMapsUri',
   // 匯入專用：多抓地址、電話、營業時間、分類標籤（費用較高，只在匯入時用）
   enrichSearch:
-    'places.id,places.displayName,places.location,places.rating,places.userRatingCount,places.priceLevel,places.formattedAddress,places.nationalPhoneNumber,places.regularOpeningHours.weekdayDescriptions,places.types,places.primaryTypeDisplayName,places.googleMapsUri',
+    'places.id,places.displayName,places.location,places.rating,places.userRatingCount,places.priceLevel,places.formattedAddress,places.addressComponents,places.nationalPhoneNumber,places.regularOpeningHours.weekdayDescriptions,places.types,places.primaryTypeDisplayName,places.googleMapsUri',
   parkingNearby: 'places.displayName',
 };
 

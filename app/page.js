@@ -20,6 +20,43 @@ const PRICE_MAP = {
   PRICE_LEVEL_INEXPENSIVE: '1', PRICE_LEVEL_MODERATE: '2',
   PRICE_LEVEL_EXPENSIVE: '3', PRICE_LEVEL_VERY_EXPENSIVE: '4',
 };
+// Google 餐廳類型（英文代碼）→ 中文標籤；沒對到的就用去底線的英文，之後可手動改
+const TYPE_ZH = {
+  restaurant: '餐廳', ramen_restaurant: '拉麵', japanese_restaurant: '日式',
+  korean_restaurant: '韓式', chinese_restaurant: '中式', italian_restaurant: '義式',
+  french_restaurant: '法式', thai_restaurant: '泰式', vietnamese_restaurant: '越南',
+  indian_restaurant: '印度', american_restaurant: '美式', mexican_restaurant: '墨西哥',
+  spanish_restaurant: '西班牙', greek_restaurant: '希臘', turkish_restaurant: '土耳其',
+  seafood_restaurant: '海鮮', sushi_restaurant: '壽司', steak_house: '牛排',
+  barbecue_restaurant: '燒烤', hamburger_restaurant: '漢堡', pizza_restaurant: '披薩',
+  fast_food_restaurant: '速食', vegetarian_restaurant: '素食', vegan_restaurant: '純素',
+  breakfast_restaurant: '早餐', brunch_restaurant: '早午餐', cafe: '咖啡',
+  coffee_shop: '咖啡', bakery: '烘焙', dessert_shop: '甜點', dessert_restaurant: '甜點',
+  ice_cream_shop: '冰品', bar: '酒吧', pub: '酒吧', bar_and_grill: '餐酒館',
+  fine_dining_restaurant: '高級餐廳', buffet_restaurant: '自助餐', diner: '小館',
+  meal_takeaway: '外帶', meal_delivery: '外送', sandwich_shop: '三明治',
+  asian_restaurant: '亞洲料理', middle_eastern_restaurant: '中東', tea_house: '茶館',
+};
+const GENERIC_TYPES = new Set(['point_of_interest', 'establishment', 'food', 'store']);
+const zhType = (t) => TYPE_ZH[t] || t.replace(/_restaurant$/, '').replace(/_/g, ' ');
+// 從 Google addressComponents 取出國家與城市
+function parseCountryCity(comps) {
+  let country = '', city = '';
+  for (const c of comps || []) {
+    const ty = c.types || [];
+    if (ty.includes('country')) country = c.longText || c.shortText || '';
+    if (!city && ty.includes('locality')) city = c.longText || '';
+  }
+  if (!city) { // 沒有 locality 時退而求其次用行政區
+    for (const c of comps || []) {
+      const ty = c.types || [];
+      if (ty.includes('administrative_area_level_1') || ty.includes('administrative_area_level_2')) {
+        city = c.longText || ''; break;
+      }
+    }
+  }
+  return { country, city };
+}
 
 function haversine(a, b) {
   const R = 6371000, r = (x) => (x * Math.PI) / 180;
@@ -44,6 +81,7 @@ const fromRow = (r) => ({
   rating: r.rating ?? null, ratingCount: r.rating_count ?? null,
   address: r.address || '', phone: r.phone || '', hours: r.hours || [],
   tags: r.tags || [], googleUri: r.google_uri || '',
+  country: r.country || '', city: r.city || '',
 });
 
 async function placesFetch(kind, params) {
@@ -91,6 +129,7 @@ function Card({ r, dist, lbl, onEdit, onDel }) {
           <span className="rating">★ {r.rating.toFixed(1)}{r.ratingCount != null && ` (${r.ratingCount})`}</span>
         )}
         {dist != null && <span>📏 {fmtDist(dist)}</span>}
+        {(r.city || r.country) && <span>🌏 {[r.city, r.country].filter(Boolean).join('・')}</span>}
         {r.type && <span>{r.type}</span>}
         {r.price && <span>{lbl('prices', r.price)}</span>}
         {r.parking === 'none' && <span>{lbl('parks', 'none')}</span>}
@@ -229,7 +268,7 @@ function App({ session }) {
   useEffect(() => { refreshLocation(); }, [refreshLocation]);
 
   /* ---- 新增 / 編輯表單 ---- */
-  const emptyForm = { name: '', type: '', status: DEF_CFG.statuses[0].v, price: '', parking: 'unknown', dishes: '', notes: '' };
+  const emptyForm = { name: '', type: '', tags: '', status: DEF_CFG.statuses[0].v, price: '', parking: 'unknown', dishes: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
   const [formLoc, setFormLoc] = useState(null);
   const [fAddr, setFAddr] = useState('');
@@ -274,6 +313,7 @@ function App({ session }) {
     setSaving(true);
     const row = {
       name, type: form.type.trim(),
+      tags: (form.tags || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean),
       status: form.status || cfg.statuses[0]?.v || 'want',
       price: form.price || '', parking: form.parking || 'unknown',
       dishes: form.dishes.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
@@ -299,7 +339,7 @@ function App({ session }) {
     if (!r) return;
     setEditingId(id);
     setForm({
-      name: r.name, type: r.type || '', status: r.status, price: String(r.price || ''),
+      name: r.name, type: r.type || '', tags: (r.tags || []).join(', '), status: r.status, price: String(r.price || ''),
       parking: r.parking || 'unknown', dishes: (r.dishes || []).join(', '), notes: r.notes || '',
     });
     setFormLoc({ lat: r.lat, lng: r.lng });
@@ -326,6 +366,14 @@ function App({ session }) {
   const [gError, setGError] = useState('');
   const [parkResults, setParkResults] = useState({});
 
+  /* ---- 地區篩選（國家 / 城市）---- */
+  const [fCountry, setFCountry] = useState('');
+  const [fCity, setFCity] = useState('');
+  const passRegion = useCallback(
+    (r) => (!fCountry || r.country === fCountry) && (!fCity || r.city === fCity),
+    [fCountry, fCity]
+  );
+
   function matchKeyword(r, k) {
     if (!k) return true;
     const hay = (r.name + ' ' + (r.type || '') + ' ' + (r.dishes || []).join(' ') + ' ' + (r.notes || '') + ' ' + (r.address || '') + ' ' + (r.tags || []).join(' ')).toLowerCase();
@@ -340,6 +388,7 @@ function App({ session }) {
 
     let m = data.map((r) => ({ r, d: haversine(center, r) }))
       .filter((x) => x.d <= maxD)
+      .filter((x) => passRegion(x.r))
       .filter((x) => matchKeyword(x.r, k))
       .filter((x) => !sPrices.length || sPrices.includes(x.r.price))
       .filter((x) => {
@@ -544,8 +593,8 @@ function App({ session }) {
       const it = items[i];
       setGmapsStatus(`匯入中 ${i + 1}/${items.length}：${it.name}`);
       let loc = null, rating = null, ratingCount = null, placeId = null;
-      let gType = '', gPrice = '', address = '', phone = '', hours = [], tags = [], googleUri = '';
-      // 用店名查 Google，一次抓齊座標＋星等＋地址＋電話＋營業時間＋分類＋價位
+      let gType = '', gPrice = '', address = '', phone = '', hours = [], tags = [], googleUri = '', country = '', city = '';
+      // 用店名查 Google，一次抓齊座標＋星等＋地址＋電話＋營業時間＋分類＋價位＋國家城市
       try {
         const params = { textQuery: it.name, maxResultCount: 1 };
         if (myLocRef.current) params.bias = { ...myLocRef.current, radius: 50000 };
@@ -561,8 +610,11 @@ function App({ session }) {
           address = p.formattedAddress || '';
           phone = p.nationalPhoneNumber || '';
           hours = p.regularOpeningHours?.weekdayDescriptions || [];
-          tags = (p.types || []).filter((t) => !['point_of_interest', 'establishment', 'food'].includes(t));
+          // 把 Google 判斷的所有可能類型都先標上（中文化），去掉太空泛的，之後可編輯
+          const rawTypes = (p.types || []).filter((t) => !GENERIC_TYPES.has(t));
+          tags = [...new Set([gType, ...rawTypes.map(zhType)].filter(Boolean))];
           googleUri = p.googleMapsUri || '';
+          ({ country, city } = parseCountryCity(p.addressComponents));
         }
       } catch { /* ignore */ }
       if (!loc) { // API 查不到位置時，用網址裡的座標保底
@@ -575,6 +627,7 @@ function App({ session }) {
         dishes: [], notes: [it.note, '來自 Google Maps 清單：' + it.list].filter(Boolean).join('\n'),
         lat: loc.lat, lng: loc.lng, rating, rating_count: ratingCount,
         address, phone, hours, tags, google_uri: googleUri, place_id: placeId,
+        country, city,
       });
     }
     let ok = 0;
@@ -589,8 +642,15 @@ function App({ session }) {
 
   /* ---- 附近清單 ---- */
   const nearbyList = data
+    .filter(passRegion)
     .map((r) => ({ r, d: myLoc ? haversine(myLoc, r) : null }))
     .sort((a, b) => (a.d ?? 9e9) - (b.d ?? 9e9));
+
+  /* ---- 地區篩選選項 ---- */
+  const countryOpts = [...new Set(data.map((r) => r.country).filter(Boolean))].sort();
+  const cityOpts = [...new Set(
+    data.filter((r) => !fCountry || r.country === fCountry).map((r) => r.city).filter(Boolean)
+  )].sort();
 
   /* ---- 停車下拉選項 ---- */
   const parkOptions = [];
@@ -613,6 +673,18 @@ function App({ session }) {
             <span>{nearbyText}</span>
             <button className="btn mini" onClick={refreshLocation}>重新定位</button>
           </div>
+          {(countryOpts.length > 0 || cityOpts.length > 0) && (
+            <div className="row filterBar">
+              <select value={fCountry} onChange={(e) => { setFCountry(e.target.value); setFCity(''); }}>
+                <option value="">🌏 全部國家</option>
+                {countryOpts.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <select value={fCity} onChange={(e) => setFCity(e.target.value)}>
+                <option value="">🏙️ 全部城市</option>
+                {cityOpts.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          )}
           {data.length === 0 ? (
             <div className="empty">還沒有任何記錄。<br />去「➕ 記錄」新增第一間餐廳吧！</div>
           ) : (
@@ -690,13 +762,17 @@ function App({ session }) {
           <label className="f">餐廳名稱 *</label>
           <input type="text" value={form.name} onChange={(e) => setF('name', e.target.value)} placeholder="例如：教父牛排" />
 
-          <label className="f">類型</label>
+          <label className="f">類型（主要）</label>
           <input type="text" value={form.type} onChange={(e) => setF('type', e.target.value)} list="typeList" placeholder="例如：牛排" />
           <datalist id="typeList">
             <option value="牛排" /><option value="火鍋" /><option value="日式" /><option value="韓式" />
             <option value="中式" /><option value="義式" /><option value="美式" /><option value="燒肉" />
             <option value="小吃" /><option value="甜點" /><option value="咖啡" /><option value="早午餐" />
           </datalist>
+
+          <label className="f">料理標籤 / 關鍵字（逗號分隔，可多個）</label>
+          <input type="text" value={form.tags} onChange={(e) => setF('tags', e.target.value)} placeholder="例如：拉麵, 沾麵, 宵夜, 排隊" />
+          <p className="hint">匯入時會自動用 Google 分類填入，可自行增刪。搜尋時這些關鍵字都找得到。</p>
 
           <label className="f">狀態 <span style={{ fontWeight: 400, color: 'var(--muted)' }}>（可在設定新增選項）</span></label>
           <Chips options={cfg.statuses} value={form.status} onChange={(v) => setF('status', v)} />
