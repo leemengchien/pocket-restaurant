@@ -412,6 +412,7 @@ function App({ session }) {
   const [gPlaces, setGPlaces] = useState([]);
   const [gError, setGError] = useState('');
   const [parkResults, setParkResults] = useState({});
+  const [destText, setDestText] = useState(''); // 想去的城市/地點
 
   /* ---- 地區篩選（國家 / 城市）---- */
   const [fCountry, setFCountry] = useState('');
@@ -471,6 +472,44 @@ function App({ session }) {
       }))
         .map((p) => ({ ...p, d: haversine(center, p) }))
         .filter((p) => p.d <= maxD)
+        .filter((p) => !excludeNames.some((n) => (n && p.name.includes(n)) || (p.name && n.includes(p.name))));
+      places.sort((a, b) => b.rating - a.rating || b.cnt - a.cnt);
+      setGPlaces(places); setGState('done');
+    } catch (e) { setGError(e.message); setGState('error'); }
+  }
+
+  /* ---- 到新城市 / 地點搜尋（沒記錄過也能找）---- */
+  async function searchDest() {
+    const q = destText.trim();
+    if (!q) { alert('請輸入城市或地點，例如：大阪、東京車站、京都四条'); return; }
+    setGState('loading'); setGError('');
+    try {
+      // 1. 先把這個地點轉成座標
+      const g = await placesFetch('searchText', { textQuery: q, maxResultCount: 1 });
+      const p0 = (g.places || [])[0];
+      if (!p0?.location) { setGError(`找不到「${q}」這個地點`); setGState('error'); setMine([]); return; }
+      const center = { lat: p0.location.latitude, lng: p0.location.longitude };
+      setSearchCenter({ ...center, auto: false });
+      // 2. 列出你在那附近（30km 內）已記錄的口袋名單
+      const local = data.map((r) => ({ r, d: haversine(center, r) }))
+        .filter((x) => x.d <= 30000)
+        .filter((x) => matchKeyword(x.r, kw.trim()))
+        .sort((a, b) => a.d - b.d);
+      setMine(local);
+      // 3. 搜當地高評價餐廳
+      const j = await placesFetch('searchText', {
+        textQuery: (kw.trim() ? kw.trim() + ' ' : '') + '餐廳 ' + q,
+        maxResultCount: 20,
+        bias: { lat: center.lat, lng: center.lng, radius: 50000 },
+      });
+      const excludeNames = local.map((x) => x.r.name);
+      let places = (j.places || []).map((p) => ({
+        id: p.id, name: p.displayName?.text || '', rating: p.rating || 0, cnt: p.userRatingCount || 0,
+        lat: p.location?.latitude, lng: p.location?.longitude, addr: p.formattedAddress || '',
+        uri: p.googleMapsUri,
+        price: { PRICE_LEVEL_INEXPENSIVE: 1, PRICE_LEVEL_MODERATE: 2, PRICE_LEVEL_EXPENSIVE: 3, PRICE_LEVEL_VERY_EXPENSIVE: 4 }[p.priceLevel] || 0,
+      }))
+        .map((p) => ({ ...p, d: haversine(center, p) }))
         .filter((p) => !excludeNames.some((n) => (n && p.name.includes(n)) || (p.name && n.includes(p.name))));
       places.sort((a, b) => b.rating - a.rating || b.cnt - a.cnt);
       setGPlaces(places); setGState('done');
@@ -817,6 +856,15 @@ function App({ session }) {
               </div>
             </>
           )}
+
+          <label className="f">要去別的城市／地點？（沒記錄過也能找）</label>
+          <div className="row">
+            <input type="text" value={destText} onChange={(e) => setDestText(e.target.value)}
+              placeholder="輸入地點，例如：大阪、東京車站、京都四条"
+              enterKeyHint="search" onKeyDown={(e) => e.key === 'Enter' && searchDest()} />
+            <button className="btn mini" style={{ flex: '0 0 auto' }} onClick={searchDest}>🔍 搜當地</button>
+          </div>
+          <p className="hint">會把定點移到該地點，列出當地 Google 高評價餐廳（可先在上面打關鍵字，例如「拉麵」）。</p>
 
           <label className="f">價位（每人，可複選）</label>
           <Chips options={cfg.prices} value={sPrices} onChange={setSPrices} multi />
