@@ -309,18 +309,19 @@ function App({ session }) {
   useEffect(() => { refreshLocation(); }, [refreshLocation]);
 
   /* ---- 新增 / 編輯表單 ---- */
-  const emptyForm = { name: '', type: '', tags: '', country: '', city: '', district: '', status: DEF_CFG.statuses[0].v, price: '', parking: 'unknown', dishes: '', notes: '' };
+  const emptyForm = { name: '', type: '', tags: '', country: '', city: '', district: '', status: DEF_CFG.statuses[0].v, price: '', parking: 'unknown', dishes: '', notes: '', address: '', phone: '' };
   const [form, setForm] = useState(emptyForm);
   const [formLoc, setFormLoc] = useState(null);
   const [fAddr, setFAddr] = useState('');
   const [fLocText, setFLocText] = useState('尚未設定位置');
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [fDetails, setFDetails] = useState(null); // geocode 時抓到的營業時間/電話/地址/星等，存檔時帶入
   const setF = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   function resetForm() {
     setForm({ ...emptyForm, status: cfg.statuses[0]?.v || 'want' });
-    setFormLoc(null); setFAddr(''); setFLocText('尚未設定位置'); setEditingId(null);
+    setFormLoc(null); setFAddr(''); setFLocText('尚未設定位置'); setEditingId(null); setFDetails(null);
   }
 
   async function geocodeAddr() {
@@ -330,14 +331,26 @@ function App({ session }) {
     try {
       const params = { textQuery: q, maxResultCount: 1 };
       if (myLocRef.current) params.bias = { ...myLocRef.current, radius: 50000 };
-      const j = await placesFetch('searchText', params);
+      // 用 enrichSearch 一併抓營業時間／電話／地址／星等，存檔時帶入
+      const j = await placesFetch('enrichSearch', params);
       const p = (j.places || [])[0];
       if (!p) { setFLocText('❌ 查不到這個地址，請改用「🗺️ 地圖選點」'); return; }
       const loc = { lat: p.location.latitude, lng: p.location.longitude };
       setFormLoc(loc);
+      const hrs = p.regularOpeningHours?.weekdayDescriptions || [];
+      // 地址、電話帶進可編輯欄位；營業時間等其他詳情暫存，存檔時一併寫入
+      if (p.formattedAddress) setF('address', p.formattedAddress);
+      if (p.nationalPhoneNumber) setF('phone', p.nationalPhoneNumber);
+      setFDetails({
+        hours: hrs,
+        rating: p.rating ?? null,
+        rating_count: p.userRatingCount ?? null,
+        place_id: p.id || null,
+        google_uri: p.googleMapsUri || '',
+      });
       if (!form.name && !/\d+(巷|弄|號)/.test(q)) setF('name', q); // 輸入的是店名就順便帶入
       const label = p.displayName?.text || p.formattedAddress || '';
-      setFLocText(`✅ ${label}（${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}）`);
+      setFLocText(`✅ ${label}（${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}）${hrs.length ? '，已帶入營業時間' : ''}`);
     } catch (e) { setFLocText('查詢失敗：' + e.message); }
   }
 
@@ -360,7 +373,10 @@ function App({ session }) {
       price: form.price || '', parking: form.parking || 'unknown',
       dishes: form.dishes.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
       notes: form.notes.trim(), lat: formLoc.lat, lng: formLoc.lng,
+      address: form.address.trim(), phone: form.phone.trim(),
     };
+    // 有做過「查詢座標/店名」才帶入營業時間等 Google 詳情，避免編輯時洗掉既有資料
+    if (fDetails) Object.assign(row, fDetails);
     try {
       if (editingId) {
         const { error } = await supabase.from('restaurants').update(row).eq('id', editingId);
@@ -380,11 +396,13 @@ function App({ session }) {
     const r = data.find((x) => x.id === id);
     if (!r) return;
     setEditingId(id);
+    setFDetails(null); // 除非重新查詢座標，否則保留既有營業時間等資料
     setForm({
       name: r.name, type: r.type || '', tags: (r.tags || []).join(', '),
       country: r.country || '', city: r.city || '', district: r.district || '',
       status: r.status, price: String(r.price || ''),
       parking: r.parking || 'unknown', dishes: (r.dishes || []).join(', '), notes: r.notes || '',
+      address: r.address || '', phone: r.phone || '',
     });
     setFormLoc({ lat: r.lat, lng: r.lng });
     setFAddr(r.address || '');
@@ -528,12 +546,39 @@ function App({ session }) {
     } catch { setParkResults((s) => ({ ...s, [p.id]: '查詢失敗' })); }
   }
 
-  function collectPlace(p) {
+  async function collectPlace(p) {
     resetForm();
-    setForm((f) => ({ ...f, name: p.name, price: p.price ? String(p.price) : '' }));
+    // 先帶入搜尋結果已有的資料（店名、價位、地址、星等、連結）
+    setForm((f) => ({ ...f, name: p.name, price: p.price ? String(p.price) : '', address: p.addr || '' }));
     setFormLoc({ lat: p.lat, lng: p.lng });
+    setFDetails({
+      hours: [],
+      rating: p.rating ?? null,
+      rating_count: p.cnt ?? null,
+      place_id: p.id || null,
+      google_uri: p.uri || '',
+    });
     setFLocText(`已設定位置（${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}）`);
     setTab('add');
+    // 再補查營業時間與電話（搜尋用的 searchText 沒有這些欄位）
+    try {
+      const j = await placesFetch('enrichSearch', {
+        textQuery: p.name, maxResultCount: 1,
+        bias: { lat: p.lat, lng: p.lng, radius: 2000 },
+      });
+      const g = (j.places || [])[0];
+      if (g) {
+        if (g.formattedAddress) setF('address', g.formattedAddress);
+        if (g.nationalPhoneNumber) setF('phone', g.nationalPhoneNumber);
+        setFDetails({
+          hours: g.regularOpeningHours?.weekdayDescriptions || [],
+          rating: g.rating ?? p.rating ?? null,
+          rating_count: g.userRatingCount ?? p.cnt ?? null,
+          place_id: g.id || p.id || null,
+          google_uri: g.googleMapsUri || p.uri || '',
+        });
+      }
+    } catch { /* 補查失敗就沿用搜尋結果已有的資料 */ }
   }
 
   /* ---- 地圖選點 ---- */
@@ -974,6 +1019,22 @@ function App({ session }) {
 
           <label className="f">備註</label>
           <textarea value={form.notes} onChange={(e) => setF('notes', e.target.value)} placeholder="例如：要先訂位、週一公休" />
+
+          <label className="f">地址 <span style={{ fontWeight: 400, color: 'var(--muted)' }}>（查詢座標時自動帶入，可自行修改）</span></label>
+          <input type="text" value={form.address} onChange={(e) => setF('address', e.target.value)} placeholder="例如：台北市信義區松高路11號" />
+
+          <label className="f">電話</label>
+          <input type="tel" value={form.phone} onChange={(e) => setF('phone', e.target.value)} placeholder="例如：02 1234 5678" />
+
+          {(() => {
+            const hrs = fDetails?.hours || (editingId ? data.find((x) => x.id === editingId)?.hours : null) || [];
+            return hrs.length ? (
+              <div style={{ marginTop: 4 }}>
+                <label className="f">🕐 營業時間 <span style={{ fontWeight: 400, color: 'var(--muted)' }}>（Google 提供，唯讀）</span></label>
+                <div className="hint" style={{ lineHeight: 1.7 }}>{hrs.map((h, i) => <div key={i}>{h}</div>)}</div>
+              </div>
+            ) : null;
+          })()}
 
           <label className="f">國家 / 縣市 / 地區 <span style={{ fontWeight: 400, color: 'var(--muted)' }}>（匯入時自動判斷，空白處可自行選或填）</span></label>
           <div className="row">
