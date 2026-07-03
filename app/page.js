@@ -542,6 +542,17 @@ function App({ session }) {
   const mapObj = useRef(null);
   const markerRef = useRef(null);
   const leafletRef = useRef(null);
+  const [mapSearch, setMapSearch] = useState('');
+  const [mapSearching, setMapSearching] = useState(false);
+
+  const placeMapMarker = useCallback((latlng) => {
+    const L = leafletRef.current;
+    if (!L || !mapObj.current) return;
+    if (markerRef.current) markerRef.current.setLatLng(latlng);
+    else markerRef.current = L.marker(latlng, {
+      icon: L.divIcon({ className: 'pin', html: '📍', iconSize: [30, 30], iconAnchor: [15, 28] }),
+    }).addTo(mapObj.current);
+  }, []);
 
   useEffect(() => {
     if (!mapOpen) return;
@@ -552,25 +563,37 @@ function App({ session }) {
       await new Promise((r) => setTimeout(r, 80));
       if (!alive) return;
       const start = formLoc || searchCenter || myLoc || { lat: 25.0339, lng: 121.5645 };
-      const placeMarker = (latlng) => {
-        if (markerRef.current) markerRef.current.setLatLng(latlng);
-        else markerRef.current = L.marker(latlng, {
-          icon: L.divIcon({ className: 'pin', html: '📍', iconSize: [30, 30], iconAnchor: [15, 28] }),
-        }).addTo(mapObj.current);
-      };
       if (!mapObj.current) {
         mapObj.current = L.map('map').setView([start.lat, start.lng], 16);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(mapObj.current);
-        mapObj.current.on('click', (e) => placeMarker(e.latlng));
+        mapObj.current.on('click', (e) => placeMapMarker(e.latlng));
       } else {
         mapObj.current.setView([start.lat, start.lng], 16);
         mapObj.current.invalidateSize();
       }
-      placeMarker([start.lat, start.lng]);
+      placeMapMarker([start.lat, start.lng]);
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapOpen]);
+
+  // 在地圖選點視窗裡用文字搜尋地點/地址/地標，找到就把圖釘移過去
+  async function geocodeMapSearch() {
+    const q = mapSearch.trim();
+    if (!q) return;
+    setMapSearching(true);
+    try {
+      const params = { textQuery: q, maxResultCount: 1 };
+      if (myLocRef.current) params.bias = { ...myLocRef.current, radius: 50000 };
+      const j = await placesFetch('searchText', params);
+      const p = (j.places || [])[0];
+      if (!p?.location) { alert(`找不到「${q}」，換個關鍵字或直接點地圖`); setMapSearching(false); return; }
+      const latlng = [p.location.latitude, p.location.longitude];
+      mapObj.current?.setView(latlng, 17);
+      placeMapMarker(latlng);
+    } catch (e) { alert('搜尋失敗：' + e.message); }
+    setMapSearching(false);
+  }
 
   function openMapPicker(mode) { setMapMode(mode); setMapOpen(true); }
   function confirmMapPick() {
@@ -1025,6 +1048,42 @@ function App({ session }) {
           <input type="file" id="importFile" accept=".json" style={{ display: 'none' }} onChange={importData} />
           <p className="hint">資料已存在雲端，任何裝置登入同一個 Google 帳號都看得到。「匯入備份」也可用來搬移舊版（單檔網頁）匯出的 JSON。</p>
 
+          <div className="secTitle" style={{ marginTop: 26 }}>📖 使用說明</div>
+          <details className="help">
+            <summary>① 從 Google Maps 匯出收藏（含筆記）</summary>
+            <ol>
+              <li>電腦開 <a href="https://takeout.google.com" target="_blank" rel="noreferrer">takeout.google.com</a>，登入你的 Google 帳號。</li>
+              <li>按右上「取消全選」。</li>
+              <li>往下找到「Saved（已儲存）」勾起來 →「下一步」。</li>
+              <li>選「以電子郵件傳送下載連結」、「匯出一次」、.zip →「建立匯出作業」。</li>
+              <li>收到信後下載 .zip、解壓縮，每個清單是一個 CSV 檔（含店名與你寫的筆記）。</li>
+            </ol>
+          </details>
+          <details className="help">
+            <summary>② 匯入本系統</summary>
+            <ol>
+              <li>用同一個 Google 帳號登入本網站。</li>
+              <li>設定 →「🗺️ 從 Google Maps 已儲存匯入」→ 選 CSV 檔（可多選）。</li>
+              <li>確認後系統會逐一查 Google，補上星等、地址、電話、營業時間、價位、國家／縣市／地區、料理分類與你的筆記（約 2–4 分鐘，請勿關閉分頁）。</li>
+              <li>只會匯入沒匯過的店，重複匯入同一份不會產生重複。</li>
+            </ol>
+          </details>
+          <details className="help">
+            <summary>③ 整理分類（不花額度）</summary>
+            <ol>
+              <li>設定 →「🔧 重新分類國家／縣市／地區」，用已存地址自動補大部分。</li>
+              <li>回「附近」，把國家篩選切到「⚠️ 未分類」，逐一點「✏️ 編輯」手動補剩下的。</li>
+            </ol>
+          </details>
+          <details className="help">
+            <summary>④ 常見問題</summary>
+            <ol>
+              <li><b>筆記會不見嗎？</b>不會，會放進備註、搜尋也找得到。</li>
+              <li><b>能自動同步 Google 嗎？</b>不行，Google 沒有讀取個人收藏的 API；之後新增收藏就重新 Takeout 匯出再匯入，新的店會自動補進來。</li>
+              <li><b>去沒記錄過的新城市？</b>到「搜尋」頁用「要去別的城市／地點？」輸入地點（例如大阪），即可找當地高評價餐廳。</li>
+            </ol>
+          </details>
+
           <div className="secTitle" style={{ marginTop: 26 }}>🗺️ 從 Google Maps「已儲存」匯入</div>
           <p className="hint">
             1. 開 <a href="https://takeout.google.com" target="_blank" rel="noreferrer">takeout.google.com</a> →「取消全選」→ 只勾「<b>已儲存</b>」→ 下一步 → 建立匯出<br />
@@ -1059,7 +1118,13 @@ function App({ session }) {
       {/* map picker modal（常駐 DOM，地圖物件可重用） */}
       <div id="mapModal" className={mapOpen ? 'open' : ''}>
         <div className="sheet">
-          <b>{mapMode === 'center' ? '點地圖設定搜尋定點' : '點地圖選擇餐廳位置'}</b>
+          <b>{mapMode === 'center' ? '搜尋或點地圖設定搜尋定點' : '搜尋或點地圖選擇餐廳位置'}</b>
+          <div className="row" style={{ marginTop: 6 }}>
+            <input type="text" value={mapSearch} onChange={(e) => setMapSearch(e.target.value)}
+              placeholder="搜地點／地址／地標，例如：大阪城、台北101、京都四条通"
+              enterKeyHint="search" onKeyDown={(e) => e.key === 'Enter' && geocodeMapSearch()} />
+            <button className="btn mini" style={{ flex: '0 0 auto' }} onClick={geocodeMapSearch}>{mapSearching ? '…' : '🔍 找'}</button>
+          </div>
           <div id="map" />
           <button className="btn" style={{ marginTop: 0 }} onClick={confirmMapPick}>確認這個位置</button>
           <button className="btn sub" onClick={() => setMapOpen(false)}>取消</button>
