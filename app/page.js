@@ -57,18 +57,46 @@ function parseCountryCity(comps) {
   let out = { country, city, district };
   return out;
 }
-// 從已存的中文地址字串解析縣市與地區（給既有資料補齊用，不花 API 額度）
-function parseCityDistrictFromAddress(addr) {
-  const s = String(addr || '');
-  const cityM = s.match(/([一-龥]{2}[縣市])/);
-  const city = cityM ? cityM[1] : '';
+// 常見城市：英文/羅馬拼音 → 中文（給地址無中文時用，例如日本回傳 Osaka）
+const CITY_ROMAJI = {
+  osaka: '大阪', tokyo: '東京', kyoto: '京都', kobe: '神戶', nagoya: '名古屋',
+  yokohama: '橫濱', fukuoka: '福岡', sapporo: '札幌', nara: '奈良', hiroshima: '廣島',
+  sendai: '仙台', naha: '那霸', okinawa: '沖繩', chiba: '千葉', kawasaki: '川崎',
+  saitama: '埼玉', kanazawa: '金澤', hakodate: '函館', otaru: '小樽', kitakyushu: '北九州',
+  seoul: '首爾', busan: '釜山', bangkok: '曼谷', singapore: '新加坡',
+  taipei: '台北', kaohsiung: '高雄', taichung: '台中', tainan: '台南',
+};
+// 國家關鍵字（中/英）→ 中文國名
+const COUNTRY_KEYS = [
+  ['日本', '日本'], ['japan', '日本'], ['臺灣', '台灣'], ['台灣', '台灣'], ['taiwan', '台灣'],
+  ['韓國', '韓國'], ['korea', '韓國'], ['香港', '香港'], ['hong kong', '香港'],
+  ['泰國', '泰國'], ['thailand', '泰國'], ['新加坡', '新加坡'], ['singapore', '新加坡'],
+];
+// 日本常見「區（Ward）」羅馬拼音 → 中文
+const WARD_ROMAJI = {
+  kita: '北區', chuo: '中央區', naniwa: '浪速區', nishi: '西區', minato: '港區',
+  shibuya: '澀谷區', shinjuku: '新宿區', chiyoda: '千代田區', taito: '台東區',
+  sumida: '墨田區', setagaya: '世田谷區', nakano: '中野區', tennoji: '天王寺區',
+};
+// 從已存的地址字串解析國家/縣市/地區（中文與英文皆可，給既有資料補齊用，不花 API 額度）
+function normalizeRegion(addr) {
+  const s = String(addr || ''); const low = s.toLowerCase();
+  let country = '';
+  for (const [k, v] of COUNTRY_KEYS) { if (s.includes(k) || low.includes(k.toLowerCase())) { country = v; break; } }
+  // 城市：先抓中文縣市，再退而用英文/羅馬拼音對照
+  let city = '', cityM = s.match(/([一-龥]{2}[縣市])/);
+  if (cityM) city = cityM[1];
+  if (!city) for (const [k, v] of Object.entries(CITY_ROMAJI)) { if (low.includes(k)) { city = v; break; } }
+  if (!country && cityM) country = '台灣'; // 有中文縣市但沒國家 → 視為台灣
+  // 地區
   let district = '';
-  if (city) {
-    const rest = s.slice(s.indexOf(city) + city.length);
+  if (cityM) {
+    const rest = s.slice(s.indexOf(cityM[1]) + cityM[1].length);
     const dM = rest.match(/^([一-龥]{1,4}?[區鄉鎮市])/);
     if (dM) district = dM[1];
   }
-  return { city, district };
+  if (!district) { const wM = low.match(/([a-z]+)\s+ward/); if (wM) district = WARD_ROMAJI[wM[1]] || ''; }
+  return { country, city, district };
 }
 
 function haversine(a, b) {
@@ -281,7 +309,7 @@ function App({ session }) {
   useEffect(() => { refreshLocation(); }, [refreshLocation]);
 
   /* ---- 新增 / 編輯表單 ---- */
-  const emptyForm = { name: '', type: '', tags: '', status: DEF_CFG.statuses[0].v, price: '', parking: 'unknown', dishes: '', notes: '' };
+  const emptyForm = { name: '', type: '', tags: '', country: '', city: '', district: '', status: DEF_CFG.statuses[0].v, price: '', parking: 'unknown', dishes: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
   const [formLoc, setFormLoc] = useState(null);
   const [fAddr, setFAddr] = useState('');
@@ -327,6 +355,7 @@ function App({ session }) {
     const row = {
       name, type: form.type.trim(),
       tags: (form.tags || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean),
+      country: form.country.trim(), city: form.city.trim(), district: form.district.trim(),
       status: form.status || cfg.statuses[0]?.v || 'want',
       price: form.price || '', parking: form.parking || 'unknown',
       dishes: form.dishes.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
@@ -352,7 +381,9 @@ function App({ session }) {
     if (!r) return;
     setEditingId(id);
     setForm({
-      name: r.name, type: r.type || '', tags: (r.tags || []).join(', '), status: r.status, price: String(r.price || ''),
+      name: r.name, type: r.type || '', tags: (r.tags || []).join(', '),
+      country: r.country || '', city: r.city || '', district: r.district || '',
+      status: r.status, price: String(r.price || ''),
       parking: r.parking || 'unknown', dishes: (r.dishes || []).join(', '), notes: r.notes || '',
     });
     setFormLoc({ lat: r.lat, lng: r.lng });
@@ -387,7 +418,10 @@ function App({ session }) {
   const [fCity, setFCity] = useState('');
   const [fDistrict, setFDistrict] = useState('');
   const passRegion = useCallback(
-    (r) => (!fCountry || r.country === fCountry) && (!fCity || r.city === fCity) && (!fDistrict || r.district === fDistrict),
+    (r) => {
+      if (fCountry === '__none__') return !r.country || !r.city; // 只看未分類
+      return (!fCountry || r.country === fCountry) && (!fCity || r.city === fCity) && (!fDistrict || r.district === fDistrict);
+    },
     [fCountry, fCity, fDistrict]
   );
 
@@ -403,8 +437,9 @@ function App({ session }) {
     const k = kw.trim();
     const maxD = Number(sDist);
 
+    const regionActive = !!(fCountry || fCity || fDistrict);
     let m = data.map((r) => ({ r, d: haversine(center, r) }))
-      .filter((x) => x.d <= maxD)
+      .filter((x) => regionActive || x.d <= maxD) // 有選地區就不受距離限制
       .filter((x) => passRegion(x.r))
       .filter((x) => matchKeyword(x.r, k))
       .filter((x) => !sPrices.length || sPrices.includes(x.r.price))
@@ -632,9 +667,10 @@ function App({ session }) {
           tags = [...new Set([gType, ...rawTypes.map(zhType)].filter(Boolean))];
           googleUri = p.googleMapsUri || '';
           ({ country, city, district } = parseCountryCity(p.addressComponents));
-          // 補強：若結構化資料沒解出，改從中文地址字串抓縣市/地區
-          if ((!city || !district) && address) {
-            const f = parseCityDistrictFromAddress(address);
+          // 補強：結構化資料沒解出時，改從地址字串抓（中英文皆可）
+          if ((!country || !city || !district) && address) {
+            const f = normalizeRegion(address);
+            country = country || f.country;
             city = city || f.city;
             district = district || f.district;
           }
@@ -668,18 +704,23 @@ function App({ session }) {
   async function backfillRegions() {
     const targets = data.filter((r) => r.address);
     if (!targets.length) { setBackfillStatus('沒有可解析的地址'); return; }
-    if (!confirm(`用已存的地址重新解析 ${targets.length} 筆的縣市 / 地區？（不會呼叫 Google、不花額度）`)) return;
-    let ok = 0;
+    if (!confirm(`用已存的地址重新解析 ${targets.length} 筆的國家 / 縣市 / 地區？（不會呼叫 Google、不花額度）`)) return;
+    let ok = 0, done = 0;
     for (const r of targets) {
-      const f = parseCityDistrictFromAddress(r.address);
-      if (!f.city && !f.district) continue; // 非中文地址（如國外）就跳過，保留原本的
-      setBackfillStatus(`處理中… ${ok + 1}/${targets.length}`);
-      const { error } = await supabase.from('restaurants').update({ city: f.city, district: f.district }).eq('id', r.id);
+      done++;
+      setBackfillStatus(`處理中… ${done}/${targets.length}`);
+      const f = normalizeRegion(r.address);
+      const upd = {};
+      if (f.country) upd.country = f.country;
+      if (f.city) upd.city = f.city;
+      if (f.district) upd.district = f.district;
+      if (!Object.keys(upd).length) continue; // 解析不出（少數地址）就保留原本的
+      const { error } = await supabase.from('restaurants').update(upd).eq('id', r.id);
       if (!error) ok++;
     }
     const { data: rows } = await supabase.from('restaurants').select('*').order('created_at');
     if (rows) setData(rows.map(fromRow));
-    setBackfillStatus(`✅ 已重新分類 ${ok} 筆縣市/地區`);
+    setBackfillStatus(`✅ 已重新分類 ${ok} 筆（國家/縣市/地區）`);
   }
 
   /* ---- 附近清單 ---- */
@@ -697,6 +738,7 @@ function App({ session }) {
     data.filter((r) => (!fCountry || r.country === fCountry) && (!fCity || r.city === fCity))
       .map((r) => r.district).filter(Boolean)
   )].sort();
+  const unclassifiedCount = data.filter((r) => !r.country || !r.city).length;
 
   /* ---- 停車下拉選項 ---- */
   const parkOptions = [];
@@ -719,17 +761,18 @@ function App({ session }) {
             <span>{nearbyText}</span>
             <button className="btn mini" onClick={refreshLocation}>重新定位</button>
           </div>
-          {(countryOpts.length > 0 || cityOpts.length > 0 || districtOpts.length > 0) && (
+          {(countryOpts.length > 0 || cityOpts.length > 0 || districtOpts.length > 0 || unclassifiedCount > 0) && (
             <div className="row filterBar">
               <select value={fCountry} onChange={(e) => { setFCountry(e.target.value); setFCity(''); setFDistrict(''); }}>
                 <option value="">🌏 全部國家</option>
                 {countryOpts.map((c) => <option key={c} value={c}>{c}</option>)}
+                {unclassifiedCount > 0 && <option value="__none__">⚠️ 未分類（{unclassifiedCount}）</option>}
               </select>
-              <select value={fCity} onChange={(e) => { setFCity(e.target.value); setFDistrict(''); }}>
+              <select value={fCity} disabled={fCountry === '__none__'} onChange={(e) => { setFCity(e.target.value); setFDistrict(''); }}>
                 <option value="">🏙️ 全部城市</option>
                 {cityOpts.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
-              <select value={fDistrict} onChange={(e) => setFDistrict(e.target.value)}>
+              <select value={fDistrict} disabled={fCountry === '__none__'} onChange={(e) => setFDistrict(e.target.value)}>
                 <option value="">📍 全部地區</option>
                 {districtOpts.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -758,6 +801,22 @@ function App({ session }) {
           <label className="f">想吃什麼？（關鍵字：牛排、火鍋、店名、菜名⋯）</label>
           <input type="text" value={kw} onChange={(e) => setKw(e.target.value)} placeholder="例如：牛排"
             enterKeyHint="search" onKeyDown={(e) => e.key === 'Enter' && doSearch()} />
+
+          {(countryOpts.length > 0 || cityOpts.length > 0) && (
+            <>
+              <label className="f">地區（可選，縮小範圍；選了就不受距離限制）</label>
+              <div className="row">
+                <select value={fCountry} onChange={(e) => { setFCountry(e.target.value); setFCity(''); setFDistrict(''); }}>
+                  <option value="">🌏 全部國家</option>
+                  {countryOpts.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <select value={fCity} onChange={(e) => { setFCity(e.target.value); setFDistrict(''); }}>
+                  <option value="">🏙️ 全部城市</option>
+                  {cityOpts.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </>
+          )}
 
           <label className="f">價位（每人，可複選）</label>
           <Chips options={cfg.prices} value={sPrices} onChange={setSPrices} multi />
@@ -839,6 +898,16 @@ function App({ session }) {
           <label className="f">備註</label>
           <textarea value={form.notes} onChange={(e) => setF('notes', e.target.value)} placeholder="例如：要先訂位、週一公休" />
 
+          <label className="f">國家 / 縣市 / 地區 <span style={{ fontWeight: 400, color: 'var(--muted)' }}>（匯入時自動判斷，空白處可自行選或填）</span></label>
+          <div className="row">
+            <input type="text" value={form.country} list="countryDL" onChange={(e) => setF('country', e.target.value)} placeholder="國家 例：台灣" />
+            <input type="text" value={form.city} list="cityDL" onChange={(e) => setF('city', e.target.value)} placeholder="縣市 例：臺北市" />
+            <input type="text" value={form.district} list="districtDL" onChange={(e) => setF('district', e.target.value)} placeholder="地區 例：信義區" />
+          </div>
+          <datalist id="countryDL">{[...new Set(data.map((r) => r.country).filter(Boolean))].sort().map((c) => <option key={c} value={c} />)}</datalist>
+          <datalist id="cityDL">{[...new Set(data.map((r) => r.city).filter(Boolean))].sort().map((c) => <option key={c} value={c} />)}</datalist>
+          <datalist id="districtDL">{[...new Set(data.map((r) => r.district).filter(Boolean))].sort().map((c) => <option key={c} value={c} />)}</datalist>
+
           <label className="f">位置 *</label>
           <input type="text" value={fAddr} onChange={(e) => setFAddr(e.target.value)} enterKeyHint="search"
             placeholder="輸入地址或店名，例如：台北市信義區市府路45號"
@@ -912,9 +981,9 @@ function App({ session }) {
           <input type="file" id="gmapsCsv" accept=".csv" multiple style={{ display: 'none' }} onChange={importGmapsCsv} />
           <p className="hint">{gmapsStatus}</p>
 
-          <div className="secTitle" style={{ marginTop: 26 }}>🔧 重新分類縣市 / 地區</div>
-          <p className="hint">用每筆「已存的地址」重新解析出縣市與地區（例如 臺北市 / 信義區），不會呼叫 Google、不花額度。之前匯入的資料若分類不對，按這個即可修正。</p>
-          <button className="btn sub" style={{ marginTop: 8 }} onClick={backfillRegions}>重新分類縣市/地區</button>
+          <div className="secTitle" style={{ marginTop: 26 }}>🔧 重新分類國家 / 縣市 / 地區</div>
+          <p className="hint">用每筆「已存的地址」重新解析出國家、縣市、地區（台灣如 臺北市／信義區；日本英文地址如 Osaka 也會轉成 大阪）。不會呼叫 Google、不花額度。之前匯入分類是空的或不對，按這個即可修正。</p>
+          <button className="btn sub" style={{ marginTop: 8 }} onClick={backfillRegions}>重新分類國家/縣市/地區</button>
           <p className="hint">{backfillStatus}</p>
 
           <div className="secTitle" style={{ marginTop: 26 }}>📲 安裝到手機</div>
