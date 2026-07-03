@@ -404,6 +404,7 @@ function App({ session }) {
 
   /* ---- 搜尋 ---- */
   const [kw, setKw] = useState('');
+  const [sStatus, setSStatus] = useState([]);
   const [sPrices, setSPrices] = useState([]);
   const [sDist, setSDist] = useState('1000');
   const [sPark, setSPark] = useState('');
@@ -443,6 +444,7 @@ function App({ session }) {
       .filter((x) => regionActive || x.d <= maxD) // 有選地區就不受距離限制
       .filter((x) => passRegion(x.r))
       .filter((x) => matchKeyword(x.r, k))
+      .filter((x) => !sStatus.length || sStatus.includes(x.r.status))
       .filter((x) => !sPrices.length || sPrices.includes(x.r.price))
       .filter((x) => {
         if (!sPark) return true;
@@ -494,6 +496,7 @@ function App({ session }) {
       const local = data.map((r) => ({ r, d: haversine(center, r) }))
         .filter((x) => x.d <= 30000)
         .filter((x) => matchKeyword(x.r, kw.trim()))
+        .filter((x) => !sStatus.length || sStatus.includes(x.r.status))
         .sort((a, b) => a.d - b.d);
       setMine(local);
       // 3. 搜當地高評價餐廳
@@ -865,6 +868,9 @@ function App({ session }) {
             <button className="btn mini" style={{ flex: '0 0 auto' }} onClick={searchDest}>🔍 搜當地</button>
           </div>
           <p className="hint">會把定點移到該地點，列出當地 Google 高評價餐廳（可先在上面打關鍵字，例如「拉麵」）。</p>
+
+          <label className="f">狀態（可複選）</label>
+          <Chips options={cfg.statuses} value={sStatus} onChange={setSStatus} multi />
 
           <label className="f">價位（每人，可複選）</label>
           <Chips options={cfg.prices} value={sPrices} onChange={setSPrices} multi />
